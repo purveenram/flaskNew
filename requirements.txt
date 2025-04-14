@@ -1,5 +1,6 @@
 flask
 flask-cors
+dlib
 face_recognition
 requests
 gunicorn
