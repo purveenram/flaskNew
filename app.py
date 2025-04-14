@@ -1,8 +1,8 @@
 from flask import Flask, request, jsonify
-import face_recognition
+from flask_cors import CORS
+from deepface import DeepFace
 import requests
 import io
-from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
@@ -11,69 +11,72 @@ NHOST_GRAPHQL_URL = "https://jpglhtcjffhmukchuxjj.hasura.ap-south-1.nhost.run/v1
 NHOST_STORAGE_URL = "https://jpglhtcjffhmukchuxjj.storage.ap-south-1.nhost.run/v1/files"
 NHOST_ADMIN_SECRET = "hGgA8;r;CNg+N(T'%50OHNT7'4Zx(A2F"
 
+# Fetch all profile face image URLs
 def get_all_profile_face_urls():
     query = """
-   query {
-      Profiles {
-        user_id,
-        face_url
-      }
+    query {
+        Profiles {
+            user_id,
+            face_url
+        }
     }
     """
     headers = {
         "Content-Type": "application/json",
         "x-hasura-admin-secret": NHOST_ADMIN_SECRET
     }
-    print("1")
+
     response = requests.post(
         NHOST_GRAPHQL_URL,
         json={"query": query},
         headers=headers,
     )
-    print("2")
+
     if response.status_code != 200:
         raise Exception(f"GraphQL error: {response.status_code} - {response.text}")
 
     data = response.json()
-    print(data)
     profiles = data['data']['Profiles']
-    print(profiles)
-    base_url = "https://jpglhtcjffhmukchuxjj.storage.ap-south-1.nhost.run/v1/files/"
+    base_url = NHOST_STORAGE_URL + "/"
+
     face_urls = {
-    user["user_id"]: base_url + user["face_url"]
-    for user in profiles
-    if user.get("face_url")
+        user["user_id"]: base_url + user["face_url"]
+        for user in profiles
+        if user.get("face_url")
     }
-    print(face_urls)
     return face_urls
 
+# Fetch image from a URL as BytesIO (for DeepFace)
 def fetch_image_from_nhost(face_url):
     response = requests.get(face_url)
     if response.status_code != 200:
         raise Exception(f"Failed to fetch image: {face_url}")
-    return face_recognition.load_image_file(io.BytesIO(response.content))
+    return io.BytesIO(response.content)
 
-def match_faces(uploaded_encoding, profiles, threshold=0.6):
+# Match faces using DeepFace (Facenet model)
+def match_faces_deepface(uploaded_image, profiles, model_name='Facenet', threshold=0.6):
     for user_id, face_url in profiles.items():
         try:
             profile_image = fetch_image_from_nhost(face_url)
-            encodings = face_recognition.face_encodings(profile_image)
-            if not encodings:
-                continue
-            profile_encoding = encodings[0]
-            distance = face_recognition.face_distance([profile_encoding], uploaded_encoding)[0]
-            if distance < threshold:
+
+            result = DeepFace.verify(
+                img1_path=uploaded_image,
+                img2_path=profile_image,
+                model_name=model_name,
+                enforce_detection=False
+            )
+
+            if result["verified"] and result["distance"] < threshold:
                 return user_id
         except Exception as e:
+            print(f"Error comparing with {user_id}: {e}")
             continue
     return None
 
 def send_notification_to_user(user_id, image_url):
-    # You can implement a notification system here
     print(f"Notification sent to user {user_id} for image match: {image_url}")
 
 @app.route("/api/face-match", methods=["POST"])
-
 def face_match():
     data = request.json
     image_url = data.get("image_url")
@@ -82,19 +85,10 @@ def face_match():
         return jsonify({"error": "Missing imageUrl"}), 400
 
     try:
-
         uploaded_image = fetch_image_from_nhost(image_url)
-
-        uploaded_encodings = face_recognition.face_encodings(uploaded_image)
-
-        if not uploaded_encodings:
-            return jsonify({"error": "No face found in uploaded image"}), 400
-        uploaded_encoding = uploaded_encodings[0]
-
         profiles = get_all_profile_face_urls()
-        print(profiles)
-        matched_user = match_faces(uploaded_encoding, profiles)
- 
+        matched_user = match_faces_deepface(uploaded_image, profiles)
+
         if matched_user:
             send_notification_to_user(matched_user, image_url)
             return jsonify({"matchFound": True, "matchedUser": matched_user})
@@ -103,3 +97,4 @@ def face_match():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+

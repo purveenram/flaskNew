@@ -1,7 +1,5 @@
+deepface
 flask
 flask-cors
-cmake
-dlib
-face_recognition
 requests
 gunicorn
