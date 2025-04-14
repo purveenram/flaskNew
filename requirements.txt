@@ -1,5 +1,6 @@
-deepface
 flask
 flask-cors
 requests
 gunicorn
+deepface
+tf-keras
